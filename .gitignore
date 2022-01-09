@@ -39,7 +39,7 @@ target/
 *.ini
 
 # Temporary build directories
-TagMechanic/
+TagMechanicMod/
 
 # Zip files (plugin releases)
 *.zip
