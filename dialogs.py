@@ -46,17 +46,6 @@ def launch_gui(bk, prefs):
     # get all files
     for id_type, href in bk.text_iter():
          all_files.append(("manifest", id_type))
-
-    if selected_files != []:
-        selectedallmessage = 'Processing selected files...'
-        #selectedallmessage = 'Przetwarzanie zaznaczonych plików...'
-        selectedallmessagekolor = 'QLabel {color: #2ECC72;}'
-        file_list = selected_files
-    else:
-        #selectedallmessage = 'Przetwarzanie wszystkich plików...'
-        selectedallmessage = 'Processing all files...'
-        selectedallmessagekolor = 'QLabel {color: #BE1055;}'
-        file_list = all_files
     # Becky END
 
     if not ismacos:
@@ -113,6 +102,17 @@ def launch_gui(bk, prefs):
     print('Looking for {} in {}'.format(qmf, os.path.join(bk._w.plugin_dir, bk._w.plugin_name, 'translations')))
     plugin_translator.load(qmf, os.path.join(bk._w.plugin_dir, bk._w.plugin_name, 'translations'))
     print('Plugin Translator succesfully installed: {}'.format(app.installTranslator(plugin_translator)))
+
+    # Becky START
+    if selected_files != []:
+        selectedallmessage = _t('guiMain', 'Processing selected files...')
+        selectedallmessagekolor = 'QLabel {color: #2ECC72;}'
+        file_list = selected_files
+    else:
+        selectedallmessage = _t('guiMain', 'Processing all files...')
+        selectedallmessagekolor = 'QLabel {color: #BE1055;}'
+        file_list = all_files
+    # Becky END
 
     win = guiMain(bk, prefs)
     app.exec_()
@@ -187,7 +187,7 @@ class ConfigDialog(QDialog):
         self.combobox_values = combobox_values
         self.qlinedit_widgets = {}
         self.setup_ui()
-        self.setWindowTitle(_t('ConfigDialog', 'Customize Tag Mechanic'))
+        self.setWindowTitle(_t('ConfigDialog', 'Customize Tag Mechanic') + ' MOD')
 
     def setup_ui(self):
         layout = QVBoxLayout()
@@ -340,7 +340,7 @@ class guiMain(QMainWindow):
             layout.addLayout(update_layout)
             self.label = QLabel()
             self.label.setText(_t('guiMain', 'Plugin Update Available') + ' ' + str(self.newversion))
-            self.label.setStyleSheet('QLabel {{color: {};}}'.format(link_color))
+            self.label.setStyleSheet(f'QLabel {{color: {link_color};}}')
             update_layout.addWidget(self.label)
 
         file_list_layout = QHBoxLayout()
@@ -572,10 +572,10 @@ class guiMain(QMainWindow):
             if occurrences:
                 # write changed markup back to file
                 self.bk.writefile(ident, html)
-                self.text_panel.insertHtml('<p>{} {}:&#160;&#160;&#160;{}<br></p>'.format(
+                self.text_panel.insertHtml('<p>{} {}:&#160;&#160;&#160;{}</p>\n'.format(
                     _t('guiMain', 'Occurrences found/changed in'), href, int(occurrences)))
             else:
-                self.text_panel.insertHtml('<p style="color: #BE1055;">{} {}<br></p>'.format(
+                self.text_panel.insertHtml('<p style="color: #BE1055;">{} {}</p>\n'.format(
                     _t('guiMain', 'Criteria not found in'), href))
 
         # report totals

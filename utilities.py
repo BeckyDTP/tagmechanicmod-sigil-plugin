@@ -34,7 +34,7 @@ font_tweaks = {
 miscellaneous_settings = {
     'windowGeometry' : None,
     'language_override': None,
-    'icon_color': '#27AAE1',
+    'icon_color': '#FFA000',
 }
 
 update_settings = {
@@ -253,16 +253,16 @@ class UpdateChecker():
             # if online version is newer, make sure it hasn't been seen already
             if _online_version is not None and tuple_version(_online_version) > tuple_version(_current_version) and _online_version != self.lastonlineversion:
                 return True, _online_version, str(datetime.now())
-        #return False, _online_version, str(datetime.now())
-        #Becky: Message about new version is displayed always
-        return True, self.lastonlineversion, str(datetime.now())
+        return False, _online_version, str(datetime.now())
+
 
 def main():
     '''Used to test outside of Sigil'''
     class w():
         def __init__(self):
             w.plugin_name = 'TagMechanicMod'
-            w.plugin_dir = '/home/dmassay/.local/share/sigil-ebook/sigil/plugins'
+            #w.plugin_dir = '/home/dmassay/.local/share/sigil-ebook/sigil/plugins'
+            w.plugin_dir = 'C:/Users/Becky/AppData/Local/sigil-ebook/sigil/plugins'
 
     tmedt = str(datetime.now() - timedelta(hours=delta+1))
     version = '0.1.0'
