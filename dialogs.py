@@ -1,8 +1,5 @@
 #!/usr/bin/env python
-# -*- coding: utf-8 -*-
 # vim:ts=4:sw=4:softtabstop=4:smarttab:expandtab
-
-from __future__ import unicode_literals, division, absolute_import, print_function
 
 import os
 import sys
@@ -292,7 +289,7 @@ class ConfigDialog(QDialog):
 
 class guiMain(QMainWindow):
     def __init__(self, bk, prefs):
-        super(guiMain, self).__init__()
+        super().__init__()
         self.taglist = taglist
         # Edit Plugin container object
         self.bk = bk
@@ -508,7 +505,7 @@ class guiMain(QMainWindow):
             srch_str = None
         if srch_str is None and criteria['attrib'] is not None:
             title = _t('guiMain', 'Error')
-            msg = '<p>{0}'.format(
+            msg = '<p>{}'.format(
                 _t('guiMain', 'Must enter a value for the attribute selected'))
             return QMessageBox.warning(self, title, msg, QMessageBox.Ok)
         criteria['srch_str'] = srch_str
@@ -522,7 +519,7 @@ class guiMain(QMainWindow):
             criteria['new_tag'] = str(self.newtag_combo.currentText())
         if criteria['action'] == 'modify' and criteria['new_tag'] is None and self.copy_attr.isChecked():
             title = _t('guiMain', 'Error')
-            msg = '<p>{0}'.format(
+            msg = '<p>{}'.format(
                 _t('guiMain', 'What--exactly--would that achieve?'))
             return QMessageBox.question(self, title, msg, QMessageBox.Ok)
 
@@ -577,6 +574,7 @@ class guiMain(QMainWindow):
             else:
                 self.text_panel.insertHtml('<p style="color: #BE1055;">{} {}</p>\n'.format(
                     _t('guiMain', 'Criteria not found in'), href))
+            self.text_panel.insertPlainText('\n')
 
         # report totals
         if totals:
