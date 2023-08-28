@@ -1,5 +1,9 @@
 #!/usr/bin/env python
+# -*- coding: utf-8 -*-
 # vim:ts=4:sw=4:softtabstop=4:smarttab:expandtab
+
+from __future__ import unicode_literals, division, absolute_import, print_function
+
 
 import re
 import os
@@ -8,9 +12,6 @@ import socket
 from datetime import datetime, timedelta
 from lxml import objectify
 
-_plat = sys.platform.lower()
-iswindows = 'win32' in _plat or 'win64' in _plat
-ismacos = isosx = 'darwin' in _plat
 
 url = 'https://raw.githubusercontent.com/beckydtp/tagmechanicmod-sigil-plugin/mod/checkversion.xml'
 delta = 12
@@ -31,6 +32,7 @@ miscellaneous_settings = {
     'windowGeometry' : None,
     'language_override': None,
     'icon_color': '#FFA000',
+    'qtwrapper_override': None,
 }
 
 update_settings = {
@@ -251,13 +253,11 @@ class UpdateChecker():
                 return True, _online_version, str(datetime.now())
         return False, _online_version, str(datetime.now())
 
-
 def main():
     '''Used to test outside of Sigil'''
     class w():
         def __init__(self):
             w.plugin_name = 'TagMechanicMod'
-            #w.plugin_dir = '/home/dmassay/.local/share/sigil-ebook/sigil/plugins'
             w.plugin_dir = 'C:/Users/Becky/AppData/Local/sigil-ebook/sigil/plugins'
 
     tmedt = str(datetime.now() - timedelta(hours=delta+1))

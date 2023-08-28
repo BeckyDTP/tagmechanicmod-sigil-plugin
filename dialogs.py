@@ -1,31 +1,29 @@
 #!/usr/bin/env python
+# -*- coding: utf-8 -*-
 # vim:ts=4:sw=4:softtabstop=4:smarttab:expandtab
+
+from __future__ import unicode_literals, division, absolute_import, print_function
 
 import os
 import sys
 import math
 
-from utilities import UpdateChecker, taglist, tuple_version, combobox_defaults, remove_dupes, ismacos, iswindows
+from utilities import UpdateChecker, taglist, combobox_defaults, remove_dupes
 from parsing_engine import MarkupParser
 
-try:
-    from PySide2.QtCore import Qt, QByteArray, QCoreApplication, QLibraryInfo, QTimer, QTranslator, qVersion
-    from PySide2.QtWidgets import QAction, QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox
-    from PySide2.QtWidgets import QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox, QPushButton
-    from PySide2.QtWidgets import QStyleFactory, QTextEdit, QVBoxLayout, QWidget
-    from PySide2.QtGui import QColor, QFont, QIcon, QPalette
-    print('Pyside2')
-except ImportError:
-    from PyQt5.QtCore import Qt, QByteArray, QCoreApplication, QLibraryInfo, QTimer, QTranslator, qVersion
-    from PyQt5.QtWidgets import QAction, QApplication, QCheckBox, QComboBox, QDialog, QDialogButtonBox
-    from PyQt5.QtWidgets import QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox, QPushButton
-    from PyQt5.QtWidgets import QStyleFactory, QTextEdit, QVBoxLayout, QWidget
-    from PyQt5.QtGui import QColor, QFont, QIcon, QPalette
-    print('PyQt5')
+from plugin_utils import Qt, QtCore, QtGui, QtWidgets, QAction
+from plugin_utils import PluginApplication, iswindows, _t  # , Signal, Slot, loadUi
+
+
+DEBUG = 0
+if DEBUG:
+    if 'PySide6' in sys.modules:
+        print('Plugin using PySide6')
+    else:
+        print('Plugin using PyQt5')
 
 BAIL_OUT = False
 PROCESSED = False
-_t = QCoreApplication.translate
 
 
 def launch_gui(bk, prefs):
@@ -45,60 +43,10 @@ def launch_gui(bk, prefs):
          all_files.append(("manifest", id_type))
     # Becky END
 
-    if not ismacos:
-        try:
-            setup_highdpi(bk._w.highdpi)
-        except Exception:
-            pass
-    try:
-        setup_ui_font(bk._w.uifont)
-    except Exception:
-        pass
-    if not ismacos and not iswindows:
-        # Qt 5.10.1 on Linux resets the global font on first event loop tick.
-        # So workaround it by setting the font once again in a timer.
-        try:
-            QTimer.singleShot(0, lambda : setup_ui_font(bk._w.uifont))
-        except Exception:
-            pass
-    app = QApplication([])
     icon = os.path.join(bk._w.plugin_dir, bk._w.plugin_name, 'plugin.svg')
-    app.setWindowIcon(QIcon(icon))
-
-    if tuple_version(qVersion()) >= (5, 10, 0):
-        app.setAttribute(Qt.AA_DisableWindowContextHelpButton)
-
-    # Make plugin match Sigil's light/dark theme
-    dark_palette(bk, app)
-
-    print('Application dir: {}'.format(QCoreApplication.applicationDirPath()))
-    # Install qtbase translator for standard dialogs and such.
-    # Use the Sigil language setting unless manually overridden.
-    qt_translator = QTranslator()
-    misc_prefs = prefs['miscellaneous_settings']
-    if misc_prefs['language_override'] is not None:
-        print('Plugin preferences language override in effect')
-        qmf = 'qtbase_{}'.format(misc_prefs['language_override'])
-    else:
-        qmf = 'qtbase_{}'.format(bk.sigil_ui_lang)
-    # Get bundled or external translations directory
-    qt_trans_dir = getQtTranslationsPath(bk._w.appdir)
-    print('Qt translation dir: {}'.format(qt_trans_dir))
-    print('Looking for {} in {}'.format(qmf, qt_trans_dir))
-    qt_translator.load(qmf, qt_trans_dir)
-    print('Qt Base Translator succesfully installed: {}'.format(app.installTranslator(qt_translator)))
-
-    # Install translator for the tagmechanic plugin dialog.
-    # Use the Sigil language setting unless manually overridden.
-    plugin_translator = QTranslator()
-    if misc_prefs['language_override'] is not None:
-        print('Plugin preferences language override in effect')
-        qmf = '{}_{}'.format(bk._w.plugin_name.lower(), misc_prefs['language_override'])
-    else:
-        qmf = '{}_{}'.format(bk._w.plugin_name.lower(), bk.sigil_ui_lang)
-    print('Looking for {} in {}'.format(qmf, os.path.join(bk._w.plugin_dir, bk._w.plugin_name, 'translations')))
-    plugin_translator.load(qmf, os.path.join(bk._w.plugin_dir, bk._w.plugin_name, 'translations'))
-    print('Plugin Translator succesfully installed: {}'.format(app.installTranslator(plugin_translator)))
+    mdp = True if iswindows else False
+    app = PluginApplication(sys.argv, bk, app_icon=icon, match_dark_palette=mdp,
+                            dont_use_native_menubars=True)
 
     # Becky START
     if selected_files != []:
@@ -112,74 +60,14 @@ def launch_gui(bk, prefs):
     # Becky END
 
     win = guiMain(bk, prefs)
-    app.exec_()
+    # Use exec() and not exec_() for PyQt5/PySide6 compliance
+    app.exec()
     return win.getAbort()
 
-def getQtTranslationsPath(sigil_path):
-    isBundled = 'sigil' in sys.prefix.lower()
-    print('Python is Bundled: {}'.format(isBundled))
-    if isBundled:
-        if sys.platform.lower().startswith('darwin'):
-            return os.path.normpath(sigil_path + '/../translations')
-        else:
-            return os.path.join(sigil_path, 'translations')
-    else:
-        return QLibraryInfo.location(QLibraryInfo.TranslationsPath)
 
-def dark_palette(bk, app):
-    if not (bk.launcher_version() >= 20200117):
-        return
-    if bk.colorMode() != "dark":
-        return
-
-    p = QPalette()
-    sigil_colors = bk.color
-    dark_color = QColor(sigil_colors("Window"))
-    disabled_color = QColor(127,127,127)
-    dark_link_color = QColor(108, 180, 238)
-    text_color = QColor(sigil_colors("Text"))
-    p.setColor(p.Window, dark_color)
-    p.setColor(p.WindowText, text_color)
-    p.setColor(p.Base, QColor(sigil_colors("Base")))
-    p.setColor(p.AlternateBase, dark_color)
-    p.setColor(p.ToolTipBase, dark_color)
-    p.setColor(p.ToolTipText, text_color)
-    p.setColor(p.Text, text_color)
-    p.setColor(p.Disabled, p.Text, disabled_color)
-    p.setColor(p.Button, dark_color)
-    p.setColor(p.ButtonText, text_color)
-    p.setColor(p.Disabled, p.ButtonText, disabled_color)
-    p.setColor(p.BrightText, Qt.red)
-    p.setColor(p.Link, dark_link_color)
-    p.setColor(p.Highlight, QColor(sigil_colors("Highlight")))
-    p.setColor(p.HighlightedText, QColor(sigil_colors("HighlightedText")))
-    p.setColor(p.Disabled, p.HighlightedText, disabled_color)
-
-    app.setStyle(QStyleFactory.create("Fusion"))
-    app.setPalette(p)
-
-def setup_highdpi(highdpi):
-    has_env_setting = False
-    env_vars = ('QT_AUTO_SCREEN_SCALE_FACTOR', 'QT_SCALE_FACTOR', 'QT_SCREEN_SCALE_FACTORS', 'QT_DEVICE_PIXEL_RATIO')
-    for v in env_vars:
-        if os.environ.get(v):
-            has_env_setting = True
-            break
-    if highdpi == 'on' or (highdpi == 'detect' and not has_env_setting):
-        QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
-    elif highdpi == 'off':
-        QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, False)
-        for p in env_vars:
-            os.environ.pop(p, None)
-
-def setup_ui_font(font_str):
-    font = QFont()
-    font.fromString(font_str)
-    QApplication.setFont(font)
-
-class ConfigDialog(QDialog):
+class ConfigDialog(QtWidgets.QDialog):
     def __init__(self, parent, combobox_values):
-        super().__init__()
+        super(ConfigDialog, self).__init__()
         self.gui = parent
         self.combobox_values = combobox_values
         self.qlinedit_widgets = {}
@@ -187,9 +75,9 @@ class ConfigDialog(QDialog):
         self.setWindowTitle(_t('ConfigDialog', 'Customize Tag Mechanic') + ' MOD')
 
     def setup_ui(self):
-        layout = QVBoxLayout()
+        layout = QtWidgets.QVBoxLayout()
         self.setLayout(layout)
-        columns_frame = QHBoxLayout()
+        columns_frame = QtWidgets.QHBoxLayout()
         layout.addLayout(columns_frame)
 
         # How many columns of nine items each will it take to display
@@ -207,7 +95,7 @@ class ConfigDialog(QDialog):
         # columns necessary. Added left to right in the parent QHBoxLayout.
         column = {}
         for i in range(1, num_cols+1):
-            column[i] = QVBoxLayout()
+            column[i] = QtWidgets.QVBoxLayout()
             column[i].setAlignment(Qt.AlignLeft)
             columns_frame.addLayout(column[i])
 
@@ -223,11 +111,11 @@ class ConfigDialog(QDialog):
                 curr_col += 1
                 curr_item = 1
             # Add lable and QLineEdit widget to current column.
-            label = QLabel('<b>{} "{}" {}</b>'.format(
+            label = QtWidgets.QLabel('{} "{}" {}'.format(
                 _t('ConfigDialog', 'Choices to change'), tag,
                 _t('ConfigDialog', 'elements to:')), self)
             label.setAlignment(Qt.AlignCenter)
-            self.qlinedit_widgets[tag] = QLineEdit(', '.join(self.combobox_values['{}_changes'.format(tag)]), self)
+            self.qlinedit_widgets[tag] = QtWidgets.QLineEdit(', '.join(self.combobox_values['{}_changes'.format(tag)]), self)
             self.qlinedit_widgets[tag].setToolTip('<p>{}'.format(tooltip))
             column[curr_col].addWidget(label)
             column[curr_col].addWidget(self.qlinedit_widgets[tag])
@@ -238,29 +126,28 @@ class ConfigDialog(QDialog):
         column[curr_col].addStretch()
 
         layout.addSpacing(10)
-        attrs_layout = QVBoxLayout()
+        attrs_layout = QtWidgets.QVBoxLayout()
         attrs_layout.setAlignment(Qt.AlignCenter)
         layout.addLayout(attrs_layout)
-        label = QLabel('<b>{}</b>'.format(
-            _t('ConfigDialog', 'HTML attributes available to search for:')), self)
+        label = QtWidgets.QLabel(_t('ConfigDialog', 'HTML attributes available to search for:'), self)
         label.setAlignment(Qt.AlignCenter)
-        self.attrs_txtBox = QLineEdit(', '.join(self.combobox_values['attrs']), self)
+        self.attrs_txtBox = QtWidgets.QLineEdit(', '.join(self.combobox_values['attrs']), self)
         self.attrs_txtBox.setToolTip('<p>{}'.format(
             _t('ConfigDialog', 'Comma separated list of html attribute names (no quotes).')))
         attrs_layout.addWidget(label)
         attrs_layout.addWidget(self.attrs_txtBox)
 
         layout.addSpacing(10)
-        right_layout = QHBoxLayout()
+        right_layout = QtWidgets.QHBoxLayout()
         right_layout.setAlignment(Qt.AlignRight)
         layout.addLayout(right_layout)
-        reset_button = QPushButton(_t('ConfigDialog', 'Reset all defaults'), self)
+        reset_button = QtWidgets.QPushButton(_t('ConfigDialog', 'Reset all defaults'), self)
         reset_button.setToolTip('<p>{}'.format(_t('ConfigDialog', 'Reset all settings to original defaults.')))
         reset_button.clicked.connect(self.reset_defaults)
         right_layout.addWidget(reset_button)
 
         layout.addSpacing(10)
-        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        button_box = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
         button_box.accepted.connect(self.save_settings)
         button_box.rejected.connect(self.reject)
         layout.addWidget(button_box)
@@ -280,16 +167,16 @@ class ConfigDialog(QDialog):
     def reset_defaults(self):
         caption= _t('ConfigDialog', 'Are you sure?')
         msg = '<p>{}'.format(_t('ConfigDialog', 'Reset all customizable options to their original defaults?'))
-        if QMessageBox.question(self, caption, msg, QMessageBox.Yes | QMessageBox.Cancel) == QMessageBox.Yes:
+        if QtWidgets.QMessageBox.question(self, caption, msg, QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.Cancel) == QtWidgets.QMessageBox.Yes:
             for tag in taglist:
                 self.combobox_values['{}_changes'.format(tag)] = combobox_defaults['{}_changes'.format(tag)]
             self.combobox_values['attrs'] = combobox_defaults['attrs']
             self.accept()
 
 
-class guiMain(QMainWindow):
+class guiMain(QtWidgets.QMainWindow):
     def __init__(self, bk, prefs):
-        super().__init__()
+        super(guiMain, self).__init__()
         self.taglist = taglist
         # Edit Plugin container object
         self.bk = bk
@@ -306,9 +193,9 @@ class guiMain(QMainWindow):
         self.setup_ui()
 
     def setup_ui(self):
-        app = QApplication.instance()
+        app = PluginApplication.instance()
         p = app.palette()
-        link_color = p.color(p.Active, p.Link).name()
+        link_color = p.color(QtGui.QPalette.Active, QtGui.QPalette.Link).name()
 
         DELETE_STR = _t('guiMain', 'Delete')
         MODIFY_STR = _t('guiMain', 'Modify')
@@ -318,32 +205,40 @@ class guiMain(QMainWindow):
         self.setWindowTitle(_t('guiMain', 'Tag Mechanic') + ' MOD')
         # Becky END
 
-        configAct = QAction(_t('guiMain', '&Config'), self)
+        configAct = QAction(_t('guiMain', 'Config'), self)
+        configAct.setShortcut('Ctrl+Alt+C')
+        tooltip = _t('guiMain','Configure')
+        configAct.setToolTip(tooltip + ' ' + self.bk._w.plugin_name)
+        icon = os.path.join(self.bk._w.plugin_dir, self.bk._w.plugin_name, 'config.svg')
+        configAct.setIcon(QtGui.QIcon(icon))
         configAct.triggered.connect(self.showConfig)
 
-        menubar = self.menuBar()
-        fileMenu = menubar.addMenu(_t('guiMain', '&Edit'))
-        fileMenu.addAction(configAct)
+        editToolBar = self.addToolBar(_t('guiMain', 'Edit'))
+        editToolBar.setMovable(False)
+        editToolBar.setFloatable(False)
+        editToolBar.setContextMenuPolicy(Qt.PreventContextMenu)
+        editToolBar.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        editToolBar.addAction(configAct)
 
-        layout = QVBoxLayout()
+        layout = QtWidgets.QVBoxLayout()
 
-        widget = QWidget()
+        widget = QtWidgets.QWidget()
         widget.setLayout(layout)
         self.setCentralWidget(widget)
 
         # Becky START
         if self.update:
-            update_layout = QHBoxLayout()
+            update_layout = QtWidgets.QHBoxLayout()
             layout.addLayout(update_layout)
-            self.label = QLabel()
+            self.label = QtWidgets.QLabel()
             self.label.setText(_t('guiMain', 'Plugin Update Available') + ' ' + str(self.newversion))
-            self.label.setStyleSheet(f'QLabel {{color: {link_color};}}')
+            self.label.setStyleSheet('QLabel {{color: {};}}'.format(link_color))
             update_layout.addWidget(self.label)
 
-        file_list_layout = QHBoxLayout()
+        file_list_layout = QtWidgets.QHBoxLayout()
         layout.addLayout(file_list_layout)
-        self.label = QLabel()
-        font = QFont()
+        self.label = QtWidgets.QLabel()
+        font = QtGui.QFont()
         font.setPointSize(14)
         self.label.setFont(font)
         self.label.setText(selectedallmessage)
@@ -351,51 +246,51 @@ class guiMain(QMainWindow):
         file_list_layout.addWidget(self.label)
         # Becky END
 
-        action_layout = QHBoxLayout()
+        action_layout = QtWidgets.QHBoxLayout()
         layout.addLayout(action_layout)
-        label = QLabel(_t('guiMain', 'Action type:'), self)
+        label = QtWidgets.QLabel(_t('guiMain', 'Action type:'), self)
         action_layout.addWidget(label)
-        self.action_combo = QComboBox()
+        self.action_combo = QtWidgets.QComboBox()
         action_layout.addWidget(self.action_combo)
         self.action_combo.addItems([DELETE_STR, MODIFY_STR])
         self.action_combo.setCurrentIndex(self.gui_prefs['action'])
         self.action_combo.currentIndexChanged.connect(self.update_gui)
 
-        tag_layout = QHBoxLayout()
+        tag_layout = QtWidgets.QHBoxLayout()
         layout.addLayout(tag_layout)
-        label = QLabel(_t('guiMain', 'Tag name:'), self)
+        label = QtWidgets.QLabel(_t('guiMain', 'Tag name:'), self)
         tag_layout.addWidget(label)
-        self.tag_combo = QComboBox()
+        self.tag_combo = QtWidgets.QComboBox()
         tag_layout.addWidget(self.tag_combo)
         self.tag_combo.addItems(self.taglist)
         self.tag_combo.setCurrentIndex(self.gui_prefs['tag'])
         self.tag_combo.currentIndexChanged.connect(self.update_gui)
 
-        attr_layout = QHBoxLayout()
+        attr_layout = QtWidgets.QHBoxLayout()
         layout.addLayout(attr_layout)
-        label = QLabel(_t('guiMain', 'Having the attribute:'), self)
+        label = QtWidgets.QLabel(_t('guiMain', 'Having the attribute:'), self)
         attr_layout.addWidget(label)
-        self.attr_combo = QComboBox()
+        self.attr_combo = QtWidgets.QComboBox()
         attr_layout.addWidget(self.attr_combo)
         self.attr_combo.addItems(self.combobox_values['attrs'])
         self.attr_combo.addItem(self.NO_ATTRIB_STR)
         self.attr_combo.setCurrentIndex(self.gui_prefs['attrs'])
         self.attr_combo.currentIndexChanged.connect(self.update_gui)
 
-        srch_layout = QHBoxLayout()
+        srch_layout = QtWidgets.QHBoxLayout()
         layout.addLayout(srch_layout)
-        label = QLabel(_t('guiMain', 'Whose value is (no quotes):'), self)
+        label = QtWidgets.QLabel(_t('guiMain', 'Whose value is (no quotes):'), self)
         srch_layout.addWidget(label)
-        self.srch_txt = QLineEdit('', self)
+        self.srch_txt = QtWidgets.QLineEdit('', self)
         srch_layout.addWidget(self.srch_txt)
-        self.srch_method = QCheckBox(_t('guiMain', 'Regex'), self)
+        self.srch_method = QtWidgets.QCheckBox(_t('guiMain', 'Regex'), self)
         srch_layout.addWidget(self.srch_method)
 
-        newtag_layout = QHBoxLayout()
+        newtag_layout = QtWidgets.QHBoxLayout()
         layout.addLayout(newtag_layout)
-        label = QLabel(_t('guiMain', 'Change tag to:'), self)
+        label = QtWidgets.QLabel(_t('guiMain', 'Change tag to:'), self)
         newtag_layout.addWidget(label)
-        self.newtag_combo = QComboBox()
+        self.newtag_combo = QtWidgets.QComboBox()
         newtag_layout.addWidget(self.newtag_combo)
 
         self.newtag_combo.addItem(self.NO_CHANGE_STR)
@@ -404,13 +299,13 @@ class guiMain(QMainWindow):
         if self.action_combo.currentIndex() == 0:
             self.newtag_combo.setDisabled(True)
 
-        newattr_layout = QVBoxLayout()
+        newattr_layout = QtWidgets.QVBoxLayout()
         layout.addLayout(newattr_layout)
-        label = QLabel(_t('guiMain', 'New attribute string to insert (entire):'), self)
+        label = QtWidgets.QLabel(_t('guiMain', 'New attribute string to insert (entire):'), self)
         newattr_layout.addWidget(label)
-        self.newattr_txt = QLineEdit('', self)
+        self.newattr_txt = QtWidgets.QLineEdit('', self)
         newattr_layout.addWidget(self.newattr_txt)
-        self.copy_attr = QCheckBox(_t('guiMain', 'Copy existing attribute string'), self)
+        self.copy_attr = QtWidgets.QCheckBox(_t('guiMain', 'Copy existing attribute string'), self)
         self.copy_attr.stateChanged.connect(self.update_txt_box)
         newattr_layout.addWidget(self.copy_attr)
         if self.action_combo.currentIndex() == 0:
@@ -418,32 +313,32 @@ class guiMain(QMainWindow):
             self.newattr_txt.setDisabled(True)
 
         layout.addSpacing(10)
-        self.text_panel = QTextEdit()
+        self.text_panel = QtWidgets.QTextEdit()
         self.text_panel.setReadOnly(True)
         layout.addWidget(self.text_panel)
 
         layout.addSpacing(10)
-        button_layout = QHBoxLayout()
+        button_layout = QtWidgets.QHBoxLayout()
         layout.addLayout(button_layout)
-        self.process_button = QPushButton(_t('guiMain', 'Process'), self)
+        self.process_button = QtWidgets.QPushButton(_t('guiMain', 'Process'), self)
         self.process_button.setToolTip('<p>{}'.format(_t('guiMain', 'Process selected files with current criteria')))
         self.process_button.clicked.connect(self._process_clicked)
         button_layout.addWidget(self.process_button)
 
-        self.abort_button = QPushButton(_t('guiMain', 'Abort Changes'), self)
+        self.abort_button = QtWidgets.QPushButton(_t('guiMain', 'Abort Changes'), self)
         self.abort_button.setToolTip('<p>{}'.format(_t('guiMain', 'Make no changes and exit')))
         self.abort_button.clicked.connect(self._abort_clicked)
         self.abort_button.setDisabled(True)
         button_layout.addWidget(self.abort_button)
 
-        self.quit_button = QPushButton(_t('guiMain', 'Quit'), self)
+        self.quit_button = QtWidgets.QPushButton(_t('guiMain', 'Quit'), self)
         self.quit_button.setToolTip('<p>{}'.format(_t('guiMain', 'Quit with no changes')))
         self.quit_button.clicked.connect(self._quit_clicked)
         button_layout.addWidget(self.quit_button)
 
         if self.misc_prefs['windowGeometry'] is not None:
             try:
-                self.restoreGeometry(QByteArray.fromHex(self.misc_prefs['windowGeometry'].encode('ascii')))
+                self.restoreGeometry(QtCore.QByteArray.fromHex(self.misc_prefs['windowGeometry'].encode('ascii')))
             except Exception:
                 pass
         self.show()
@@ -505,9 +400,9 @@ class guiMain(QMainWindow):
             srch_str = None
         if srch_str is None and criteria['attrib'] is not None:
             title = _t('guiMain', 'Error')
-            msg = '<p>{}'.format(
+            msg = '<p>{0}'.format(
                 _t('guiMain', 'Must enter a value for the attribute selected'))
-            return QMessageBox.warning(self, title, msg, QMessageBox.Ok)
+            return QtWidgets.QMessageBox.warning(self, title, msg, QtWidgets.QMessageBox.Ok)
         criteria['srch_str'] = srch_str
 
         criteria['srch_method'] = 'normal'
@@ -519,9 +414,9 @@ class guiMain(QMainWindow):
             criteria['new_tag'] = str(self.newtag_combo.currentText())
         if criteria['action'] == 'modify' and criteria['new_tag'] is None and self.copy_attr.isChecked():
             title = _t('guiMain', 'Error')
-            msg = '<p>{}'.format(
+            msg = '<p>{0}'.format(
                 _t('guiMain', 'What--exactly--would that achieve?'))
-            return QMessageBox.question(self, title, msg, QMessageBox.Ok)
+            return QtWidgets.QMessageBox.question(self, title, msg, QtWidgets.QMessageBox.Ok)
 
         criteria['new_str'] = str(self.newattr_txt.displayText())
         criteria['copy'] = False
@@ -609,7 +504,7 @@ class guiMain(QMainWindow):
     def showConfig(self):
         ''' Launch Customization Dialog '''
         dlg = ConfigDialog(self, self.combobox_values)
-        if dlg.exec_() == QDialog.Accepted:
+        if dlg.exec() == QtWidgets.QDialog.Accepted:
             self.refresh_attr_values()
             self.update_gui()
 

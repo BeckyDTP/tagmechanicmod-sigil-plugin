@@ -47,7 +47,8 @@ The core plugin files (this is where most contributors will spend their time) ar
     > plugin.py
     > plugin.xml
     > utilities.py
-
+    > config.svg
+    > plugin_utils.py
 
 Files used for building/maintaining the plugin:
 

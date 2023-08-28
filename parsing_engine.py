@@ -1,5 +1,8 @@
 #!/usr/bin/env python
+# -*- coding: utf-8 -*-
 # vim:ts=4:sw=4:softtabstop=4:smarttab:expandtab
+
+from __future__ import unicode_literals, division, absolute_import, print_function
 
 from collections import OrderedDict
 import regex as re
@@ -22,7 +25,7 @@ def attrMatch(attr_str, method, srch_str):
         else:
             return False
 
-class MarkupParser:
+class MarkupParser(object):
     ''' The criteria parameter dictionary specs
     criteria['html']              Param 1 - the contents of the (x)html file: unicode text.
     criteria['action']            Param 2 - action to take: unicode text ('modify' or 'delete')
@@ -232,13 +235,13 @@ class MarkupParser:
                     if tname == self.tag and ttype in ('begin', 'single', 'single_ext') and \
                         self.attrib in tattr.keys() and attrMatch(tattr[self.attrib], self.srch_method, self.srch_str):
                         if self.action == 'delete':
-                            tname = 'removeme:{}'.format(tname)
+                            tname = 'removeme:{0}'.format(tname)
                             tattr = None
                         elif self.action == 'modify':
                             if self.new_tag is None:
-                                tname = 'changeme:{}'.format(tname)
+                                tname = 'changeme:{0}'.format(tname)
                             else:
-                                tname = 'changeme:{}'.format(self.new_tag)
+                                tname = 'changeme:{0}'.format(self.new_tag)
                             if not self.copy_attr:
                                 if not len(self.new_str):
                                     tattr = None
@@ -247,13 +250,13 @@ class MarkupParser:
                 else:  # Tags without any attributes
                     if tname == self.tag and ttype in ('begin', 'single', 'single_ext') and not len(tattr):
                         if self.action == 'delete':
-                            tname = 'removeme:{}'.format(tname)
+                            tname = 'removeme:{0}'.format(tname)
                             tattr = None
                         elif self.action == 'modify':
                             if self.new_tag is None:
-                                tname = 'changeme:{}'.format(tname)
+                                tname = 'changeme:{0}'.format(tname)
                             else:
-                                tname = 'changeme:{}'.format(self.new_tag)
+                                tname = 'changeme:{0}'.format(self.new_tag)
                             if not len(self.new_str):
                                 tattr = None
                             else:
@@ -261,16 +264,16 @@ class MarkupParser:
 
                 if tname == self.tag and ttype == 'end':
                     if self.action == 'delete':
-                        if self.path[-1] == 'removeme:{}'.format(tname):
-                            tname = 'removeme:{}'.format(tname)
+                        if self.path[-1] == 'removeme:{0}'.format(tname):
+                            tname = 'removeme:{0}'.format(tname)
                             tattr = None
                     elif self.action == 'modify':
                         if self.new_tag is None:
-                            if self.path[-1] == 'changeme:{}'.format(tname):
-                                tname = 'changeme:{}'.format(tname)
+                            if self.path[-1] == 'changeme:{0}'.format(tname):
+                                tname = 'changeme:{0}'.format(tname)
                         else:
-                            if self.path[-1] == 'changeme:{}'.format(self.new_tag):
-                                tname = 'changeme:{}'.format(self.new_tag)
+                            if self.path[-1] == 'changeme:{0}'.format(self.new_tag):
+                                tname = 'changeme:{0}'.format(self.new_tag)
                         tattr = None
 
                 # keep track of nesting path
@@ -284,7 +287,7 @@ class MarkupParser:
                         print('improper nesting: ', self.path, tname, type)
                     self.path.pop()
 
-                if tname == 'removeme:{}'.format(tname):
+                if tname == 'removeme:{0}'.format(tname):
                     if ttype in ('begin', 'single', 'single_ext'):
                         skip = True
                     else:
@@ -337,13 +340,13 @@ class MarkupParser:
         # handle passthru special cases
         if ttype == 'passthru':
             if tname == '!--':
-                return '<!--{}-->'.format(tattr.get('info',' '))
+                return '<!--{0}-->'.format(tattr.get('info',' '))
             if tname == '!DOCTYPE':
                 return '<!DOCTYPE{}>'.format(tattr.get('info',''))
             if tname == '![CDATA[*':
                 return '<![CDATA[*{}>'.format(tattr.get('info',''))
             if tname.startswith('?'):
-                return "<{}{}?>".format(tname, tattr.get('info',''))
+                return "<{0}{1}?>".format(tname, tattr.get('info',''))
 
         # add your own processing of tags here
 
