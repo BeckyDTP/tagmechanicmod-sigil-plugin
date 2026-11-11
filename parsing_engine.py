@@ -25,6 +25,43 @@ def attrMatch(attr_str, method, srch_str):
         else:
             return False
 
+def parse_attributes(s, p=0, tattr=None):
+    '''Parse name=value pairs from s starting at p.
+    Values may be in double quotes, single quotes or unquoted.
+    Values are kept raw (entities are not decoded).'''
+    if tattr is None:
+        tattr = OrderedDict()
+    n = len(s)
+    while s.find('=', p) != -1:
+        while p < n and s[p] in ' \t\r\n':
+            p += 1
+        b = p
+        while p < n and s[p] != '=':
+            p += 1
+        aname = s[b:p].strip()
+        if aname not in SVG_ATTR:
+            aname = aname.lower()
+        p += 1
+        while p < n and s[p] in ' \t\r\n':
+            p += 1
+        if p < n and s[p] in ('"', "'"):
+            quote = s[p]
+            p += 1
+            b = p
+            e = s.find(quote, p)
+            if e == -1:
+                e = n
+            val = s[b:e]
+            p = e + 1
+        else:
+            b = p
+            while p < n and s[p] not in ('>', '/', ' ', '\t', '\r', '\n'):
+                p += 1
+            val = s[b:p]
+        tattr[aname] = val
+    return tattr, p
+
+
 class MarkupParser(object):
     ''' The criteria parameter dictionary specs
     criteria['html']              Param 1 - the contents of the (x)html file: unicode text.
@@ -52,33 +89,7 @@ class MarkupParser(object):
         self.occurrences = 0
 
     def parse_new_tattr(self, s, p=0):
-        tattr = {}
-        while s.find('=',p) != -1:
-            while s[p:p+1] == ' ':
-                p += 1
-            b = p
-            while s[p:p+1] != '=':
-                p += 1
-            aname = s[b:p]
-            if aname not in SVG_ATTR:
-                aname = aname.lower()
-            aname = aname.rstrip(' ')
-            p += 1
-            while s[p:p+1] == ' ':
-                p += 1
-            if s[p:p+1] == '"':
-                p = p + 1
-                b = p
-                while s[p:p+1] != '"':
-                    p += 1
-                val = s[b:p]
-                p += 1
-            else:
-                b = p
-                while s[p:p+1] not in ('>', '/', ' '):
-                    p += 1
-                val = s[b:p]
-            tattr[aname] = val
+        tattr, p = parse_attributes(s, p, {})
         return tattr
 
     # parse leading text of xhtml and tag
@@ -101,7 +112,23 @@ class MarkupParser(object):
                 te = te+2
         else :
             # tb = p
-            te = self.wipml.find('>',p+1)
+            # find the closing '>' outside of quoted attribute values
+            te = -1
+            quote = None
+            for i in range(p+1, len(self.wipml)):
+                c = self.wipml[i]
+                if quote:
+                    if c == quote:
+                        quote = None
+                elif c in ('"', "'"):
+                    quote = c
+                elif c == '>':
+                    te = i
+                    break
+                elif c == '<':
+                    break
+            if te == -1:
+                te = self.wipml.find('>',p+1)
             ntb = self.wipml.find('<',p+1)
             if ntb != -1 and ntb < te:
                 self.pos = ntb
@@ -168,33 +195,7 @@ class MarkupParser(object):
             # tattr = {}
             # tattr = self.parse_attr(s,p)
 
-            tattr = OrderedDict()
-            while s.find('=',p) != -1:
-                while s[p:p+1] == ' ':
-                    p += 1
-                b = p
-                while s[p:p+1] != '=':
-                    p += 1
-                aname = s[b:p]
-                if aname not in SVG_ATTR:
-                    aname = aname.lower()
-                aname = aname.rstrip(' ')
-                p += 1
-                while s[p:p+1] == ' ':
-                    p += 1
-                if s[p:p+1] == '"':
-                    p = p + 1
-                    b = p
-                    while s[p:p+1] != '"':
-                        p += 1
-                    val = s[b:p]
-                    p += 1
-                else:
-                    b = p
-                    while s[p:p+1] not in ('>', '/', ' '):
-                        p += 1
-                    val = s[b:p]
-                tattr[aname] = val
+            tattr, p = parse_attributes(s, p)
 
         if tattr and len(tattr)== 0:
             tattr = None
@@ -309,8 +310,9 @@ class MarkupParser(object):
         if tattr:
             for key in tattr.keys():
                 res += ' '
+                # values are raw; a literal " can come from a single-quoted value
                 res += key + '="'
-                res += tattr[key] + '"'
+                res += tattr[key].replace('"', '&quot;') + '"'
             res == ' '
         if ttype == 'single':
             res += '/>'

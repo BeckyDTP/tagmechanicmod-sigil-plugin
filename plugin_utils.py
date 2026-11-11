@@ -33,7 +33,7 @@ import inspect
 SCRIPT_DIRECTORY = os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe())))
 e = os.environ.get('SIGIL_QT_RUNTIME_VERSION', '5.10.0')
 SIGIL_QT_MAJOR_VERSION = tuple(map(int, (e.split("."))))[0]
-DEBUG = 0
+DEBUG = 1
 
 
 if SIGIL_QT_MAJOR_VERSION == 6:
@@ -267,7 +267,6 @@ class PluginApplication(QtWidgets.QApplication):
         text_color = QtGui.QColor(sigil_colors("Text"))
         p.setColor(QtGui.QPalette.Window, dark_color)
         p.setColor(QtGui.QPalette.WindowText, text_color)
-        p.setColor(QtGui.QPalette.Disabled, QtGui.QPalette.WindowText, disabled_color)
         p.setColor(QtGui.QPalette.Base, QtGui.QColor(sigil_colors("Base")))
         p.setColor(QtGui.QPalette.AlternateBase, dark_color)
         p.setColor(QtGui.QPalette.ToolTipBase, dark_color)
