@@ -8,6 +8,7 @@ import sys
 import os
 
 from dialogs import launch_gui
+from configs import run_headless
 from utilities import setupPrefs, check_for_custom_icon, get_icon_color, change_icon_color
 
 
@@ -48,6 +49,13 @@ def run(bk):
                     prefs['miscellaneous_settings']['icon_color'] = new_color
                 except Exception:
                     print('Couldn\'t change icon color!')
+
+    # Automate List: "SetPluginParameter <config name>" before the plugin's line
+    # runs that saved configuration without any window. No parameter: normal GUI.
+    using_automate = getattr(bk._w, 'using_automate', False)
+    automate_parameter = (getattr(bk._w, 'automate_parameter', None) or '').strip()
+    if using_automate and automate_parameter:
+        return run_headless(bk, automate_parameter)
 
     bailOut = launch_gui(bk, prefs)
 

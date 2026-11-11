@@ -9,13 +9,14 @@ import sys
 import math
 
 from utilities import UpdateChecker, taglist, combobox_defaults, remove_dupes
-from parsing_engine import MarkupParser
+from configs import (configs_dir, list_configs, save_config, delete_config,
+                     valid_name, get_file_list, process_files)
 
 from plugin_utils import Qt, QtCore, QtGui, QtWidgets, QAction
 from plugin_utils import PluginApplication, iswindows, _t  # , Signal, Slot, loadUi
 
 
-DEBUG = 1
+DEBUG = 0
 if DEBUG:
     if 'PySide6' in sys.modules:
         print('Plugin using PySide6')
@@ -32,15 +33,8 @@ def launch_gui(bk, prefs):
     global selectedallmessage
     global selectedallmessagekolor
 
-    selected_files = []
-    all_files = []
-    for file_name in list(bk.selected_iter()):
-        if bk.id_to_mime(file_name[1]) == 'application/xhtml+xml':
-            selected_files.append(("manifest", file_name[1]))
-
-    # get all files
-    for id_type, href in bk.text_iter():
-         all_files.append(("manifest", id_type))
+    # Selected text files, or all text files if none selected
+    file_list, used_selection = get_file_list(bk)
     # Becky END
 
     icon = os.path.join(bk._w.plugin_dir, bk._w.plugin_name, 'plugin.svg')
@@ -49,20 +43,346 @@ def launch_gui(bk, prefs):
                             dont_use_native_menubars=True)
 
     # Becky START
-    if selected_files != []:
+    if used_selection:
         selectedallmessage = _t('guiMain', 'Processing selected files...')
         selectedallmessagekolor = 'QLabel {color: #2ECC72;}'
-        file_list = selected_files
     else:
         selectedallmessage = _t('guiMain', 'Processing all files...')
         selectedallmessagekolor = 'QLabel {color: #BE1055;}'
-        file_list = all_files
     # Becky END
 
-    win = guiMain(bk, prefs)
+    # Becky 0.7.0: quick window with saved configurations
+    initial_config = None
+    if prefs['miscellaneous_settings']['quick_start']:
+        entries = list_configs(configs_dir(bk))
+        if entries:
+            dlg = QuickRunDialog(bk, prefs, entries)
+            dlg.exec()
+            if dlg.outcome != 'open_full':
+                return dlg.outcome != 'commit'
+            initial_config = dlg.selected_name()
+
+    win = guiMain(bk, prefs, initial_config)
     # Use exec() and not exec_() for PyQt5/PySide6 compliance
     app.exec()
     return win.getAbort()
+
+
+# Becky 0.7.0 START - helpers for saved configurations
+def criteria_error_message(key):
+    messages = {
+        'bad_tag': _t('guiMain', 'No tag name given'),
+        'bad_action': _t('guiMain', 'Action must be "delete" or "modify"'),
+        'bad_method': _t('guiMain', 'Search method must be "normal" or "regex"'),
+        'bad_value': _t('guiMain', 'Wrong value type in configuration'),
+        'no_value': _t('guiMain', 'Must enter a value for the attribute selected'),
+        'bad_regex': _t('guiMain', 'Invalid regular expression'),
+        'pointless': _t('guiMain', 'What--exactly--would that achieve?'),
+        'not_found': _t('guiMain', 'Configuration file not found'),
+        'bad_json': _t('guiMain', 'Configuration file is not valid JSON'),
+        'bad_name': _t('guiMain', 'Invalid configuration name'),
+        'bad_tag_list': _t('guiMain', 'This tag is not on the plugin\'s tag list'),
+    }
+    return messages.get(key, key)
+
+
+def html_escape(text):
+    return (text.replace('&', '&amp;').replace('<', '&lt;')
+            .replace('>', '&gt;').replace('"', '&quot;'))
+
+
+def entry_text(entry):
+    return entry['description'] or entry['name']
+
+
+def fill_config_combo(combo, entries, placeholder=None):
+    ''' Fill a QComboBox with saved configurations; the name is stored as item data. '''
+    combo.clear()
+    if placeholder is not None:
+        combo.addItem(placeholder, None)
+    for entry in entries:
+        text = entry_text(entry)
+        if entry['error'] is not None:
+            text = '{}  [!]'.format(text)
+        combo.addItem(text, entry['name'])
+        tip = '{} {}.json'.format(_t('guiMain', 'File:'), html_escape(entry['name']))
+        if entry['description']:
+            tip = '<p><b>{}</b><br>{}'.format(html_escape(entry['description']), tip)
+        else:
+            tip = '<p>' + tip
+        if entry['error'] is not None:
+            tip += '<br><span style="color: #BE1055;">{}</span>'.format(
+                html_escape(criteria_error_message(entry['error'])))
+        combo.setItemData(combo.count() - 1, tip, Qt.ToolTipRole)
+
+
+def describe_criteria(c):
+    ''' Short HTML summary of a configuration (uses the main window's labels). '''
+    rows = []
+    action = _t('guiMain', 'Delete') if c['action'] == 'delete' else _t('guiMain', 'Modify')
+    rows.append((_t('guiMain', 'Action type:'), html_escape(action)))
+    rows.append((_t('guiMain', 'Tag name:'), '&lt;{}&gt;'.format(html_escape(c['tag']))))
+    if c['attrib'] is None:
+        attr = html_escape(_t('guiMain', 'No attributes (naked tag)'))
+    else:
+        attr = '{} = <code>{}</code>'.format(html_escape(c['attrib']), html_escape(c['srch_str'] or ''))
+        if c['srch_method'] == 'regex':
+            attr += ' ({})'.format(html_escape(_t('guiMain', 'Regex')))
+    rows.append((_t('guiMain', 'Having the attribute:'), attr))
+    if c['action'] == 'modify':
+        new_tag = html_escape(_t('guiMain', 'No change')) if c['new_tag'] is None else '&lt;{}&gt;'.format(html_escape(c['new_tag']))
+        rows.append((_t('guiMain', 'Change tag to:'), new_tag))
+        if c['copy']:
+            rows.append((_t('guiMain', 'New attribute string to insert (entire):'),
+                         html_escape(_t('guiMain', 'Copy existing attribute string'))))
+        else:
+            rows.append((_t('guiMain', 'New attribute string to insert (entire):'),
+                         '<code>{}</code>'.format(html_escape(c['new_str'])) if c['new_str'] else '&#8212;'))
+    html = '<table cellspacing="2">'
+    for label, value in rows:
+        html += '<tr><td style="padding-right: 8px;">{}</td><td>{}</td></tr>'.format(html_escape(label), value)
+    return html + '</table>'
+
+
+def report_to_panel(panel):
+    ''' Returns a report() callback for configs.process_files writing to a QTextEdit. '''
+    def report(kind, href, count):
+        if kind == 'error':
+            panel.insertHtml('<p>{} {}! {}.<br></p>'.format(
+                _t('guiMain', 'Error parsing'), href, _t('guiMain', 'File skipped')))
+        elif kind == 'changed':
+            panel.insertHtml('<p>{} {}:&#160;&#160;&#160;{}</p>\n'.format(
+                _t('guiMain', 'Occurrences found/changed in'), href, count))
+        else:
+            panel.insertHtml('<p style="color: #BE1055;">{} {}</p>\n'.format(
+                _t('guiMain', 'Criteria not found in'), href))
+        panel.insertPlainText('\n')
+    return report
+
+
+class SaveConfigDialog(QtWidgets.QDialog):
+    ''' Asks for the name (file name / Automate parameter) and the description. '''
+    def __init__(self, parent, name, description, existing_names):
+        super(SaveConfigDialog, self).__init__(parent)
+        self.original_name = name or ''
+        self.existing = {n.casefold(): n for n in existing_names}
+        self.setWindowTitle(_t('SaveConfigDialog', 'Save configuration'))
+        layout = QtWidgets.QVBoxLayout()
+        self.setLayout(layout)
+
+        form = QtWidgets.QFormLayout()
+        layout.addLayout(form)
+        self.desc_txt = QtWidgets.QLineEdit(description or '', self)
+        self.desc_txt.setToolTip('<p>{}'.format(
+            _t('SaveConfigDialog', 'Shown in the list of saved configurations.')))
+        form.addRow(_t('SaveConfigDialog', 'Description:'), self.desc_txt)
+        self.name_txt = QtWidgets.QLineEdit(self.original_name, self)
+        self.name_txt.setToolTip('<p>{}'.format(
+            _t('SaveConfigDialog', 'File name (without .json). No characters: \\ / : * ? &quot; &lt; &gt; |')))
+        form.addRow(_t('SaveConfigDialog', 'Name:'), self.name_txt)
+
+        self.hint = QtWidgets.QLabel(self)
+        self.hint.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.hint.setWordWrap(True)
+        layout.addWidget(self.hint)
+        self.name_txt.textChanged.connect(self.update_hint)
+        self.update_hint()
+
+        button_box = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
+        button_box.accepted.connect(self.check_and_accept)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
+        self.setMinimumWidth(460)
+        if self.desc_txt.text():
+            self.name_txt.setFocus()
+
+    def update_hint(self):
+        name = self.name_txt.text().strip()
+        self.hint.setText('{}<br><code>SetPluginParameter {}</code>'.format(
+            html_escape(_t('SaveConfigDialog', 'Use in an Automate List:')), html_escape(name or '...')))
+
+    def name(self):
+        return self.name_txt.text().strip()
+
+    def description(self):
+        return self.desc_txt.text().strip()
+
+    def check_and_accept(self):
+        name = self.name()
+        if not valid_name(name):
+            msg = '<p>{}<p>{}'.format(
+                _t('guiMain', 'Invalid configuration name'),
+                _t('SaveConfigDialog', 'File name (without .json). No characters: \\ / : * ? &quot; &lt; &gt; |'))
+            QtWidgets.QMessageBox.warning(self, _t('guiMain', 'Error'), msg, QtWidgets.QMessageBox.Ok)
+            return
+        existing = self.existing.get(name.casefold())
+        if existing is not None and existing.casefold() != self.original_name.casefold():
+            msg = '<p>{} <b>{}</b>. {}'.format(
+                _t('SaveConfigDialog', 'A configuration with this name already exists:'), html_escape(existing),
+                _t('SaveConfigDialog', 'Replace it?'))
+            if QtWidgets.QMessageBox.question(self, _t('ConfigDialog', 'Are you sure?'), msg,
+                                              QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.Cancel) != QtWidgets.QMessageBox.Yes:
+                return
+        self.accept()
+
+
+class QuickRunDialog(QtWidgets.QDialog):
+    ''' Shown at start (if enabled): pick a saved configuration and run it,
+    as many times / configurations as needed, then commit or abort. '''
+    def __init__(self, bk, prefs, entries):
+        super(QuickRunDialog, self).__init__()
+        self.bk = bk
+        self.misc_prefs = prefs['miscellaneous_settings']
+        self.entries = {e['name']: e for e in entries}
+        self.outcome = 'abort'
+        self.totals = 0
+        self.setWindowTitle(_t('QuickRunDialog', 'Tag Mechanic - saved configurations') + ' MOD')
+        layout = QtWidgets.QVBoxLayout()
+        self.setLayout(layout)
+
+        label = QtWidgets.QLabel(selectedallmessage, self)
+        font = QtGui.QFont()
+        font.setPointSize(14)
+        label.setFont(font)
+        label.setStyleSheet(selectedallmessagekolor)
+        layout.addWidget(label)
+
+        combo_layout = QtWidgets.QHBoxLayout()
+        layout.addLayout(combo_layout)
+        combo_layout.addWidget(QtWidgets.QLabel(_t('guiMain', 'Saved configuration:'), self))
+        self.config_combo = QtWidgets.QComboBox(self)
+        self.config_combo.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+        combo_layout.addWidget(self.config_combo, 1)
+        fill_config_combo(self.config_combo, entries)
+        last = self.misc_prefs['last_config']
+        if last is not None:
+            idx = self.config_combo.findData(last)
+            if idx >= 0:
+                self.config_combo.setCurrentIndex(idx)
+        self.config_combo.currentIndexChanged.connect(self.update_summary)
+
+        self.summary = QtWidgets.QLabel(self)
+        self.summary.setTextFormat(Qt.RichText)
+        self.summary.setWordWrap(True)
+        self.summary.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.summary.setFrameShape(QtWidgets.QFrame.StyledPanel)
+        self.summary.setMargin(6)
+        layout.addWidget(self.summary)
+
+        self.text_panel = QtWidgets.QTextEdit(self)
+        self.text_panel.setReadOnly(True)
+        layout.addWidget(self.text_panel, 1)
+
+        button_layout = QtWidgets.QHBoxLayout()
+        layout.addLayout(button_layout)
+        self.process_button = QtWidgets.QPushButton(_t('guiMain', 'Process'), self)
+        self.process_button.setToolTip('<p>{}'.format(
+            _t('QuickRunDialog', 'Run the selected configuration. You can run more configurations one after another.')))
+        self.process_button.clicked.connect(self._process_clicked)
+        button_layout.addWidget(self.process_button)
+        self.full_button = QtWidgets.QPushButton(_t('QuickRunDialog', 'Open in main window'), self)
+        self.full_button.setToolTip('<p>{}'.format(
+            _t('QuickRunDialog', 'Open the full plugin window with the selected configuration loaded')))
+        self.full_button.clicked.connect(self._full_clicked)
+        button_layout.addWidget(self.full_button)
+        self.abort_button = QtWidgets.QPushButton(_t('guiMain', 'Abort Changes'), self)
+        self.abort_button.setToolTip('<p>{}'.format(_t('guiMain', 'Make no changes and exit')))
+        self.abort_button.clicked.connect(self._abort_clicked)
+        self.abort_button.setDisabled(True)
+        button_layout.addWidget(self.abort_button)
+        self.quit_button = QtWidgets.QPushButton(_t('guiMain', 'Quit'), self)
+        self.quit_button.setToolTip('<p>{}'.format(_t('guiMain', 'Quit with no changes')))
+        self.quit_button.clicked.connect(self._quit_clicked)
+        button_layout.addWidget(self.quit_button)
+        for b in (self.process_button, self.full_button, self.abort_button, self.quit_button):
+            b.setAutoDefault(False)
+            b.setDefault(False)
+
+        geometry = self.misc_prefs.get('quickGeometry')
+        restored = False
+        if geometry:
+            try:
+                restored = self.restoreGeometry(QtCore.QByteArray.fromHex(geometry.encode('ascii')))
+            except Exception:
+                restored = False
+        if not restored:
+            self.resize(620, 520)
+        self.update_summary()
+
+    def selected_name(self):
+        return self.config_combo.currentData()
+
+    def update_summary(self):
+        entry = self.entries.get(self.selected_name())
+        if entry is None:
+            self.summary.setText('')
+        elif entry['error'] is not None:
+            self.summary.setText('<span style="color: #BE1055;">{}</span>'.format(
+                html_escape(criteria_error_message(entry['error']))))
+        else:
+            self.summary.setText(describe_criteria(entry['criteria']))
+        self.process_button.setDisabled(entry is None or entry['error'] is not None)
+
+    def _process_clicked(self):
+        entry = self.entries.get(self.selected_name())
+        if entry is None or entry['error'] is not None:
+            return
+        self.misc_prefs['last_config'] = entry['name']
+        self.process_button.setDisabled(True)
+        PluginApplication.setOverrideCursor(Qt.WaitCursor)
+        totals = 0
+        try:
+            self.text_panel.moveCursor(QtGui.QTextCursor.End)
+            self.text_panel.insertHtml('<h4>{}...&#160;&#160;{}</h4><br>'.format(
+                _t('guiMain', 'Starting'), html_escape(entry_text(entry))))
+            totals = process_files(self.bk, file_list, entry['criteria'], report_to_panel(self.text_panel))
+            if totals:
+                self.text_panel.insertHtml('<h4><br>{}:&#160;&#160;&#160;{}</h4>'.format(
+                    _t('guiMain', 'Total occurrences found/changed'), int(totals)))
+            else:
+                self.text_panel.insertHtml('<br><h4>{}</h4>'.format(_t('guiMain', 'No changes made to book')))
+            self.text_panel.insertHtml('<br><h4>{}</h4><hr><br>'.format(_t('guiMain', 'Finished')))
+            self.text_panel.moveCursor(QtGui.QTextCursor.End)
+            self.text_panel.ensureCursorVisible()
+        finally:
+            PluginApplication.restoreOverrideCursor()
+            self.process_button.setDisabled(False)
+        self.totals += totals
+        if self.totals:
+            self.full_button.setDisabled(True)
+            self.abort_button.setDisabled(False)
+            self.quit_button.setText(_t('guiMain', 'Commit and Exit'))
+            self.quit_button.setToolTip('<p>{}'.format(_t('guiMain', 'Commit all changes and exit')))
+
+    def _save_geometry(self):
+        self.misc_prefs['quickGeometry'] = self.saveGeometry().toHex().data().decode('ascii')
+
+    def _full_clicked(self):
+        self.outcome = 'open_full'
+        self._save_geometry()
+        self.accept()
+
+    def _quit_clicked(self):
+        self.outcome = 'commit' if self.totals else 'abort'
+        self._save_geometry()
+        self.accept()
+
+    def _abort_clicked(self):
+        self.outcome = 'abort'
+        self._save_geometry()
+        self.accept()
+
+    def reject(self):
+        # Esc key or window close button: never lose changes without asking
+        if self.totals:
+            msg = '<p>{}'.format(_t('QuickRunDialog', 'Abort all changes made in this session?'))
+            if QtWidgets.QMessageBox.question(self, _t('ConfigDialog', 'Are you sure?'), msg,
+                                              QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.Cancel) != QtWidgets.QMessageBox.Yes:
+                return
+        self.outcome = 'abort'
+        self._save_geometry()
+        super(QuickRunDialog, self).reject()
+# Becky 0.7.0 END
 
 
 class ConfigDialog(QtWidgets.QDialog):
@@ -141,6 +461,15 @@ class ConfigDialog(QtWidgets.QDialog):
         right_layout = QtWidgets.QHBoxLayout()
         right_layout.setAlignment(Qt.AlignRight)
         layout.addLayout(right_layout)
+
+        # Becky 0.7.0
+        self.quick_start = QtWidgets.QCheckBox(_t('ConfigDialog', 'At start, show the quick window with saved configurations'), self)
+        self.quick_start.setToolTip('<p>{}'.format(
+            _t('ConfigDialog', 'Choose a saved configuration and run it without the main window. Works when at least one configuration is saved.')))
+        self.quick_start.setChecked(self.gui.misc_prefs['quick_start'])
+        right_layout.addWidget(self.quick_start)
+        right_layout.addSpacing(30)
+
         reset_button = QtWidgets.QPushButton(_t('ConfigDialog', 'Reset all defaults'), self)
         reset_button.setToolTip('<p>{}'.format(_t('ConfigDialog', 'Reset all settings to original defaults.')))
         reset_button.clicked.connect(self.reset_defaults)
@@ -162,6 +491,7 @@ class ConfigDialog(QtWidgets.QDialog):
         tmp_list = str(self.attrs_txtBox.displayText()).split(',')
         tmp_list = remove_dupes([x.strip(' ') for x in tmp_list])
         self.combobox_values['attrs'] = list(filter(None, tmp_list))
+        self.gui.misc_prefs['quick_start'] = self.quick_start.isChecked()
         self.accept()
 
     def reset_defaults(self):
@@ -171,11 +501,12 @@ class ConfigDialog(QtWidgets.QDialog):
             for tag in taglist:
                 self.combobox_values['{}_changes'.format(tag)] = combobox_defaults['{}_changes'.format(tag)]
             self.combobox_values['attrs'] = combobox_defaults['attrs']
+            self.gui.misc_prefs['quick_start'] = False
             self.accept()
 
 
 class guiMain(QtWidgets.QMainWindow):
-    def __init__(self, bk, prefs):
+    def __init__(self, bk, prefs, initial_config=None):
         super(guiMain, self).__init__()
         self.taglist = taglist
         # Edit Plugin container object
@@ -188,9 +519,18 @@ class guiMain(QtWidgets.QMainWindow):
         self.combobox_values = prefs['combobox_values']
 
         self._ok_to_close = False
+        # Becky 0.7.0: saved configurations
+        self.config_folder = configs_dir(bk)
+        self.config_entries = []
+        self.extra_attrs = []
         # Check online github files for newer version
         self.update, self.newversion = self.check_for_update()
         self.setup_ui()
+        if initial_config is not None:
+            idx = self.config_combo.findData(initial_config)
+            if idx > 0:
+                self.config_combo.setCurrentIndex(idx)
+                self.config_selected(idx)
 
     def setup_ui(self):
         app = PluginApplication.instance()
@@ -245,6 +585,31 @@ class guiMain(QtWidgets.QMainWindow):
         self.label.setStyleSheet(selectedallmessagekolor)
         file_list_layout.addWidget(self.label)
         # Becky END
+
+        # Becky 0.7.0 START
+        config_layout = QtWidgets.QHBoxLayout()
+        layout.addLayout(config_layout)
+        label = QtWidgets.QLabel(_t('guiMain', 'Saved configuration:'), self)
+        config_layout.addWidget(label)
+        self.config_combo = QtWidgets.QComboBox()
+        self.config_combo.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
+        self.config_combo.setToolTip('<p>{}'.format(
+            _t('guiMain', 'Selecting a saved configuration fills in the fields below')))
+        config_layout.addWidget(self.config_combo, 1)
+        self.save_config_button = QtWidgets.QPushButton(_t('guiMain', 'Save...'), self)
+        self.save_config_button.setToolTip('<p>{}'.format(
+            _t('guiMain', 'Save the current settings as a configuration (also for Automate Lists)')))
+        self.save_config_button.clicked.connect(self._save_config_clicked)
+        config_layout.addWidget(self.save_config_button)
+        self.delete_config_button = QtWidgets.QPushButton(_t('guiMain', 'Delete'), self)
+        self.delete_config_button.setToolTip('<p>{}'.format(
+            _t('guiMain', 'Delete the selected saved configuration')))
+        self.delete_config_button.clicked.connect(self._delete_config_clicked)
+        config_layout.addWidget(self.delete_config_button)
+        self.refresh_configs()
+        self.config_combo.activated.connect(self.config_selected)
+        layout.addSpacing(6)
+        # Becky 0.7.0 END
 
         action_layout = QtWidgets.QHBoxLayout()
         layout.addLayout(action_layout)
@@ -379,13 +744,14 @@ class guiMain(QtWidgets.QMainWindow):
             self.newattr_txt.setDisabled(False)
 
     def refresh_attr_values(self):
+        self.extra_attrs = []
         self.attr_combo.clear()
         self.attr_combo.addItems(self.combobox_values['attrs'])
         self.attr_combo.addItem(self.NO_ATTRIB_STR)
 
-    def _process_clicked(self):
+    def validate(self):
+        ''' Criteria from the window's fields, or None (after showing the error). '''
         criteria = {}
-        global PROCESSED
         criteria['tag'] = str(self.tag_combo.currentText())
         if self.action_combo.currentIndex() == 0:
             criteria['action'] = 'delete'
@@ -402,7 +768,8 @@ class guiMain(QtWidgets.QMainWindow):
             title = _t('guiMain', 'Error')
             msg = '<p>{0}'.format(
                 _t('guiMain', 'Must enter a value for the attribute selected'))
-            return QtWidgets.QMessageBox.warning(self, title, msg, QtWidgets.QMessageBox.Ok)
+            QtWidgets.QMessageBox.warning(self, title, msg, QtWidgets.QMessageBox.Ok)
+            return None
         criteria['srch_str'] = srch_str
 
         criteria['srch_method'] = 'normal'
@@ -416,7 +783,8 @@ class guiMain(QtWidgets.QMainWindow):
             title = _t('guiMain', 'Error')
             msg = '<p>{0}'.format(
                 _t('guiMain', 'What--exactly--would that achieve?'))
-            return QtWidgets.QMessageBox.question(self, title, msg, QtWidgets.QMessageBox.Ok)
+            QtWidgets.QMessageBox.question(self, title, msg, QtWidgets.QMessageBox.Ok)
+            return None
 
         criteria['new_str'] = str(self.newattr_txt.displayText())
         criteria['copy'] = False
@@ -424,52 +792,23 @@ class guiMain(QtWidgets.QMainWindow):
             criteria['copy'] = True
         if not len(criteria['new_str']):
             criteria['new_str'] = ''
+        return criteria
+
+    def _process_clicked(self):
+        criteria = self.validate()
+        if criteria is None:
+            return
+        global PROCESSED
 
         # Disable the 'Process' button, disable the context customization menu
         self.process_button.setDisabled(True)
         PROCESSED = True
 
-        totals = 0
         self.text_panel.clear()
         self.text_panel.insertHtml('<h4>{}...</h4><br>'.format(_t('guiMain', 'Starting')))
 
-        # Loop through the files selected in Sigil's Book View
-        # Becky START
-        # for (typ, ident) in self.bk.selected_iter():
-        for (typ, ident) in file_list:
-
-            # Skip the ones that aren't the "Text" mimetype.
-            # if self.bk.id_to_mime(ident) != 'application/xhtml+xml':
-            #     continue
-        # Becky END
-            href = self.bk.id_to_href(ident)
-            # Param 1 - the contents of the (x)html file.
-            criteria['html'] = self.bk.readfile(ident)
-            if not isinstance(criteria['html'], str):
-                criteria['html'] = str(criteria['html'], 'utf-8')
-
-            # Hand off the "criteria" parameters dictionary to the parsing engine
-            parser = MarkupParser(criteria)
-
-            # Retrieve the new markup and the number of occurrences changed
-            try:
-                html, occurrences = parser.processml()
-            except Exception:
-                self.text_panel.insertHtml('<p>{} {}! {}.<br></p>'.format(
-                        _t('guiMain', 'Error parsing'), href, _t('guiMain', 'File skipped')))
-                continue
-
-            # Report whether or not changes were made (and how many)
-            totals += occurrences
-            if occurrences:
-                # write changed markup back to file
-                self.bk.writefile(ident, html)
-                self.text_panel.insertHtml('<p>{} {}:&#160;&#160;&#160;{}</p>\n'.format(
-                    _t('guiMain', 'Occurrences found/changed in'), href, int(occurrences)))
-            else:
-                self.text_panel.insertHtml('<p style="color: #BE1055;">{} {}</p>\n'.format(
-                    _t('guiMain', 'Criteria not found in'), href))
-            self.text_panel.insertPlainText('\n')
+        # Becky: selected files, or all files if none selected (see launch_gui)
+        totals = process_files(self.bk, file_list, criteria, report_to_panel(self.text_panel))
 
         # report totals
         if totals:
@@ -483,12 +822,124 @@ class guiMain(QtWidgets.QMainWindow):
                 _t('guiMain', 'No changes made to book')))
         self.text_panel.insertHtml('<br><h4>{}</h4>'.format(_t('guiMain', 'Finished')))
 
+    # Becky 0.7.0 START
+    def refresh_configs(self, select_name=None):
+        self.config_entries = list_configs(self.config_folder)
+        fill_config_combo(self.config_combo, self.config_entries,
+                          _t('guiMain', '(none - current settings)'))
+        idx = self.config_combo.findData(select_name) if select_name is not None else 0
+        self.config_combo.setCurrentIndex(max(idx, 0))
+        self.delete_config_button.setDisabled(self.config_combo.currentIndex() <= 0)
+
+    def current_entry(self):
+        name = self.config_combo.currentData()
+        for entry in self.config_entries:
+            if entry['name'] == name:
+                return entry
+        return None
+
+    def config_selected(self, index=None):
+        entry = self.current_entry()
+        self.delete_config_button.setDisabled(entry is None)
+        if entry is None:
+            return
+        title = _t('guiMain', 'Error')
+        if entry['error'] is not None:
+            msg = '<p>{}<p>{}.json'.format(criteria_error_message(entry['error']), html_escape(entry['name']))
+            QtWidgets.QMessageBox.warning(self, title, msg, QtWidgets.QMessageBox.Ok)
+            return
+        if entry['criteria']['tag'] not in self.taglist:
+            msg = '<p>{}: &lt;{}&gt;'.format(criteria_error_message('bad_tag_list'),
+                                             html_escape(entry['criteria']['tag']))
+            QtWidgets.QMessageBox.warning(self, title, msg, QtWidgets.QMessageBox.Ok)
+            return
+        self.misc_prefs['last_config'] = entry['name']
+        self.apply_criteria(entry['criteria'])
+
+    def apply_criteria(self, c):
+        ''' Fill in the fields. Order matters: update_gui() clears fields
+        whenever the action, tag or attribute combobox changes. '''
+        self.action_combo.setCurrentIndex(0 if c['action'] == 'delete' else 1)
+        self.tag_combo.setCurrentIndex(self.taglist.index(c['tag']))
+        if c['attrib'] is None:
+            self.attr_combo.setCurrentIndex(self.attr_combo.count() - 1)
+        else:
+            idx = self.attr_combo.findText(c['attrib'], Qt.MatchExactly)
+            if idx < 0 or idx == self.attr_combo.count() - 1:
+                # Attribute not on the user's list: add it for this session only
+                idx = self.attr_combo.count() - 1
+                self.attr_combo.insertItem(idx, c['attrib'])
+                self.extra_attrs.append(c['attrib'])
+            self.attr_combo.setCurrentIndex(idx)
+        self.update_gui()
+
+        if c['new_tag'] is None:
+            self.newtag_combo.setCurrentIndex(0)
+        else:
+            idx = self.newtag_combo.findText(c['new_tag'], Qt.MatchExactly)
+            if idx <= 0:
+                self.newtag_combo.addItem(c['new_tag'])
+                idx = self.newtag_combo.count() - 1
+            self.newtag_combo.setCurrentIndex(idx)
+        self.srch_txt.setText(c['srch_str'] or '')
+        self.srch_method.setChecked(c['srch_method'] == 'regex')
+        self.copy_attr.setChecked(bool(c['copy']))
+        self.update_txt_box()
+        if not c['copy'] and c['action'] == 'modify':
+            self.newattr_txt.setText(c['new_str'] or '')
+
+    def _save_config_clicked(self):
+        criteria = self.validate()
+        if criteria is None:
+            return
+        entry = self.current_entry()
+        name = entry['name'] if entry is not None else ''
+        description = entry['description'] if entry is not None else ''
+        dlg = SaveConfigDialog(self, name, description, [e['name'] for e in self.config_entries])
+        if dlg.exec() != QtWidgets.QDialog.Accepted:
+            return
+        # On Windows "Abc" and "abc" are the same file: keep the existing spelling
+        new_name = dlg.name()
+        for e in self.config_entries:
+            if e['name'].casefold() == new_name.casefold():
+                if e['name'] != new_name:
+                    delete_config(self.config_folder, e['name'])
+                break
+        try:
+            save_config(self.config_folder, new_name, criteria, dlg.description())
+        except Exception as e:
+            QtWidgets.QMessageBox.warning(self, _t('guiMain', 'Error'), '<p>{}<p>{}'.format(
+                _t('guiMain', 'Could not save the configuration'), html_escape(str(e))), QtWidgets.QMessageBox.Ok)
+            return
+        self.misc_prefs['last_config'] = new_name
+        self.refresh_configs(new_name)
+
+    def _delete_config_clicked(self):
+        entry = self.current_entry()
+        if entry is None:
+            return
+        msg = '<p>{}<p><b>{}</b><br>{}.json'.format(
+            _t('guiMain', 'Delete this saved configuration?'),
+            html_escape(entry['description']), html_escape(entry['name']))
+        if QtWidgets.QMessageBox.question(self, _t('ConfigDialog', 'Are you sure?'), msg,
+                                          QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.Cancel) != QtWidgets.QMessageBox.Yes:
+            return
+        try:
+            delete_config(self.config_folder, entry['name'])
+        except Exception as e:
+            QtWidgets.QMessageBox.warning(self, _t('guiMain', 'Error'), html_escape(str(e)), QtWidgets.QMessageBox.Ok)
+        if self.misc_prefs['last_config'] == entry['name']:
+            self.misc_prefs['last_config'] = None
+        self.refresh_configs()
+    # Becky 0.7.0 END
+
     def _quit_clicked(self):
         self.misc_prefs['windowGeometry'] = self.saveGeometry().toHex().data().decode('ascii')
         if PROCESSED:
             self.gui_prefs['action'] = self.action_combo.currentIndex()
             self.gui_prefs['tag'] = self.tag_combo.currentIndex()
-            self.gui_prefs['attrs'] = self.attr_combo.currentIndex()
+            if str(self.attr_combo.currentText()) not in self.extra_attrs:
+                self.gui_prefs['attrs'] = self.attr_combo.currentIndex()
         self._ok_to_close = True
         self.close()
 
