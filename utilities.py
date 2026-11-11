@@ -33,6 +33,8 @@ miscellaneous_settings = {
     'language_override': None,
     'icon_color': '#FFA000',
     'qtwrapper_override': None,
+    'quick_start': False,
+    'last_config': None,
 }
 
 update_settings = {
