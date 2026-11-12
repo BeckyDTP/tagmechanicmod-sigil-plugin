@@ -33,7 +33,7 @@ import inspect
 SCRIPT_DIRECTORY = os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe())))
 e = os.environ.get('SIGIL_QT_RUNTIME_VERSION', '5.10.0')
 SIGIL_QT_MAJOR_VERSION = tuple(map(int, (e.split("."))))[0]
-DEBUG = 1
+DEBUG = 0
 
 
 if SIGIL_QT_MAJOR_VERSION == 6:
